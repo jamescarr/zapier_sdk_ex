@@ -314,6 +314,10 @@ Stubbing three endpoints by hand gets old fast, so this project's own tests use
 want the action to return and the stub handles the rest. Worth copying if you're
 doing more than a couple of these.
 
+If you're working on the SDK itself, `mix check` runs everything CI runs
+(formatter, `mix compile --warnings-as-errors`, Credo, Dialyzer, the test
+suite, and a check for retired/unused dependencies) in one shot.
+
 ## How it works
 
 Running an action takes two round trips, not one. The SDK does both for you:

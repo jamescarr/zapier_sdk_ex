@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR instead of letting them queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The version this repo's Credo/Dialyzer/hex.audit checks run against.
+  # Test coverage across supported versions is the matrix job below;
+  # static analysis only needs to run once.
+  ELIXIR_VERSION: "1.18.1"
+  OTP_VERSION: "27.1"
+
+jobs:
+  test:
+    name: mix test (OTP ${{ matrix.otp }} / Elixir ${{ matrix.elixir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest Elixir this package claims to support (mix.exs: "~> 1.15").
+          - elixir: "1.15.7"
+            otp: "25.3"
+          - elixir: "1.18.1"
+            otp: "27.1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Restore deps/build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - run: mix test
+
+  static-analysis:
+    name: format, credo, dialyzer, hex.audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Restore deps/build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - run: mix deps.get
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Credo
+        run: mix credo --strict
+
+      - name: Unused dependencies in mix.lock
+        run: mix deps.unlock --check-unused
+
+      - name: Retired Hex packages
+        run: mix hex.audit
+
+      # Rebuilding the PLT from scratch is what makes Dialyzer slow (it has to
+      # analyze every dependency, not just this package). Restoring it from
+      # cache turns a multi-minute step into a single mix.lock-keyed lookup;
+      # only a dependency bump busts it.
+      - name: Restore Dialyzer PLT cache
+        id: plt-cache
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: plt-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+
+      - name: Build Dialyzer PLT
+        if: steps.plt-cache.outputs.cache-hit != 'true'
+        run: mix dialyzer --plt
+
+      - name: Dialyzer
+        run: mix dialyzer --format github

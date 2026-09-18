@@ -1,0 +1,106 @@
+name: Publish to Hex.pm
+
+# One-time setup, before the first tag push:
+#
+# 1. Generate a Hex API key scoped to this package (not your full account key):
+#      mix hex.user key generate --key-name zapier_sdk_ex-github-actions
+#    or via https://hex.pm/dashboard/keys -> "Generate new key", permission
+#    `api:write`, restricted to the `zapier_sdk` package once it exists.
+# 2. In the GitHub repo: Settings -> Environments -> New environment -> `hex`.
+#    Optionally require a reviewer, so a tag push pauses for approval before
+#    anything reaches Hex.pm.
+# 3. In that `hex` environment, add secret HEX_API_KEY with the key from (1).
+#
+# To release: bump `@version` in mix.exs, update CHANGELOG.md, commit, then
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag's version (after stripping the leading `v`) must match `@version`
+# in mix.exs, or the job fails before anything is published.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify the package without publishing"
+        type: boolean
+        default: true
+
+env:
+  ELIXIR_VERSION: "1.18.1"
+  OTP_VERSION: "27.1"
+  # ex_doc (needed to build HexDocs) is a `only: :dev` dependency, so
+  # hex.publish must run in the same Mix env it's declared in.
+  MIX_ENV: dev
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    # Deploy-protection point: attach required reviewers/branch rules to the
+    # `hex` environment in repo settings if you want a manual gate here.
+    environment:
+      name: hex
+      url: https://hex.pm/packages/zapier_sdk
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Restore deps/build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+
+      - name: Verify the tag matches mix.exs's version
+        if: github.event_name == 'push'
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          mix_version="$(mix eval 'IO.puts(Mix.Project.config()[:version])')"
+
+          if [ "$tag_version" != "$mix_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME (version $tag_version) does not match mix.exs version $mix_version"
+            exit 1
+          fi
+
+          echo "tag matches mix.exs: $mix_version"
+
+      # Every check this repo runs, in one place, as a last gate before a
+      # release goes out. `check` = format, compile --warnings-as-errors,
+      # credo --strict, dialyzer, test, hex.audit, deps.unlock --check-unused.
+      - name: Restore Dialyzer PLT cache
+        id: plt-cache
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: plt-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+
+      - name: Build Dialyzer PLT
+        if: steps.plt-cache.outputs.cache-hit != 'true'
+        run: mix dialyzer --plt
+
+      - name: Run all checks (format, credo, dialyzer, test, audit)
+        run: mix check
+
+      - name: Build package (dry run check)
+        run: mix hex.build
+
+      - name: Publish to Hex.pm
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish --yes

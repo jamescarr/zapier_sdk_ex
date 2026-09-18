@@ -12,8 +12,8 @@ defmodule ZapierSDK.AppsTest do
 
   import Plug.Conn
 
-  alias ZapierSDK.{Catalog, Connection}
   alias ZapierSDK.Apps.{GoogleCalendar, GoogleDrive, Slack}
+  alias ZapierSDK.{Catalog, Connection}
 
   setup do
     Catalog.flush()

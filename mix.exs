@@ -23,7 +23,10 @@ defmodule ZapierSDK.MixProject do
       # Docs
       name: "ZapierSDK",
       source_url: @source_url,
-      docs: docs()
+      docs: docs(),
+
+      # Static analysis
+      dialyzer: dialyzer()
     ]
   end
 
@@ -45,6 +48,8 @@ defmodule ZapierSDK.MixProject do
 
       # Dev/Test
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:plug, "~> 1.16", only: :test}
     ]
   end
@@ -94,9 +99,33 @@ defmodule ZapierSDK.MixProject do
     ]
   end
 
+  defp dialyzer do
+    [
+      # Fixed, cacheable location so CI can restore the PLT across runs
+      # instead of rebuilding it (from scratch) on every job.
+      plt_core_path: "priv/plts",
+      plt_local_path: "priv/plts",
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
+    ]
+  end
+
   defp aliases do
     [
-      lint: ["format --check-formatted", "compile --warnings-as-errors"]
+      lint: ["format --check-formatted", "compile --warnings-as-errors", "credo --strict"],
+      # Everything CI runs, in one command, so it can be reproduced locally.
+      # `test` and the `hex.*` tasks are shelled out via `cmd` (each its own
+      # `mix` process) rather than chained directly: `mix test` needs to run
+      # under MIX_ENV=test regardless of what env `check` itself was invoked
+      # under, and `hex.audit`/`deps.unlock` only get Hex's archive on the
+      # code path when they're the top-level CLI task, not when run as a
+      # step inside another alias.
+      check: [
+        "lint",
+        "cmd mix hex.audit",
+        "cmd mix deps.unlock --check-unused",
+        "dialyzer",
+        "cmd env MIX_ENV=test mix test"
+      ]
     ]
   end
 end

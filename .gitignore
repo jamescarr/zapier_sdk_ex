@@ -16,6 +16,10 @@
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
 
+# Dialyzer's PLT cache. Rebuilding it is what's slow about `mix dialyzer`,
+# so CI restores this from cache instead of regenerating it every run.
+/priv/plts/
+
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 

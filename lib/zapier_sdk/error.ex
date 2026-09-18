@@ -77,9 +77,7 @@ defmodule ZapierSDK.Error do
   @spec from_action_errors([map()]) :: t()
   def from_action_errors(errors) when is_list(errors) do
     message =
-      errors
-      |> Enum.map(fn e -> e["detail"] || e["title"] || "Unknown error" end)
-      |> Enum.join("; ")
+      Enum.map_join(errors, "; ", fn e -> e["detail"] || e["title"] || "Unknown error" end)
 
     type =
       if Enum.any?(errors, &(&1["code"] == "authentication_error")),

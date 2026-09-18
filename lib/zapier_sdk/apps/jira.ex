@@ -22,7 +22,7 @@ defmodule ZapierSDK.Apps.Jira do
       )
   """
 
-  alias ZapierSDK.{Action, Result, Error}
+  alias ZapierSDK.{Action, Error, Result}
 
   @default_conn :jira
 
