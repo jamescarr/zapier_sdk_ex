@@ -3,20 +3,22 @@
 [![Hex.pm](https://img.shields.io/hexpm/v/zapier_sdk.svg)](https://hex.pm/packages/zapier_sdk)
 [![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/zapier_sdk)
 
-**Unofficial** Elixir SDK for the [Zapier SDK](https://docs.zapier.com/sdk). Run
-Zapier actions — search, read, write — against any of Zapier's 9,000+
-integrations directly from the BEAM, with concurrency, streaming, and telemetry
-built in.
+Zapier's [SDK](https://docs.zapier.com/sdk) gives you programmatic access to
+9,000+ app integrations without building OAuth for any of them. It ships as a
+TypeScript package. This is the Elixir version.
 
-This is a native HTTP client. There is **no Node.js, npm package, or CLI**
-involved at runtime: it talks to the [Zapier SDK API](https://docs.zapier.com/sdk)
-the same way the official TypeScript SDK does.
+It's a plain HTTP client, so there's no Node.js, no npm install, and no CLI
+running in a subprocess. It calls the same API the official SDK does, and
+everything is ordinary Elixir underneath: actions run in your process, results
+implement `Enumerable`, failures come back as tagged tuples.
 
-> The Zapier SDK is in open beta and free during early access. Enterprise
-> accounts are opted out by default. See the
-> [official docs](https://docs.zapier.com/sdk) for current status.
+Unofficial and not affiliated with Zapier.
 
-## Installation
+> Zapier's SDK is in open beta and free while it lasts. Enterprise accounts are
+> opted out by default. Check the [docs](https://docs.zapier.com/sdk) for where
+> things stand.
+
+## Install
 
 ```elixir
 def deps do
@@ -26,18 +28,19 @@ def deps do
 end
 ```
 
-## Authentication
+## Getting credentials
 
-The SDK authenticates with OAuth client credentials, the same mechanism the
-official SDK uses to run [without a browser login](https://docs.zapier.com/sdk/deploy).
-Create a pair once with the [Zapier SDK CLI](https://www.npmjs.com/package/@zapier/zapier-sdk-cli):
+Auth is OAuth client credentials, the same thing the official SDK uses to run
+[without a browser login](https://docs.zapier.com/sdk/deploy). You make a pair
+once using [Zapier's CLI](https://docs.zapier.com/sdk/using-the-cli):
 
 ```bash
 npx @zapier/zapier-sdk-cli login
 npx @zapier/zapier-sdk-cli create-client-credentials
 ```
 
-The client secret is shown **once**, at creation. Then configure it:
+Copy the secret when it appears. Zapier only shows it once, and if you lose it
+your only option is to delete the credential and make another.
 
 ```elixir
 config :zapier_sdk,
@@ -45,25 +48,27 @@ config :zapier_sdk,
   client_secret: System.get_env("ZAPIER_CREDENTIALS_CLIENT_SECRET")
 ```
 
-If `:client_id` and `:client_secret` are unset, the SDK falls back to the
-`ZAPIER_CREDENTIALS_CLIENT_ID` and `ZAPIER_CREDENTIALS_CLIENT_SECRET`
-environment variables. Tokens are fetched on first use and refreshed
-automatically before they expire.
+Leave those out and the SDK reads `ZAPIER_CREDENTIALS_CLIENT_ID` and
+`ZAPIER_CREDENTIALS_CLIENT_SECRET` from the environment instead. Those are the
+same names the TypeScript SDK looks for, so if you already have a deployment
+configured for it, this works there with no changes. Zapier's
+[deploy guide](https://docs.zapier.com/sdk/deploy) covers Railway, Vercel,
+GitHub Actions, GitLab CI, and AWS.
 
-These are the same variable names the official SDK reads, so an environment
-already set up for it works here unchanged. Zapier's
-[deploy guide](https://docs.zapier.com/sdk/deploy) covers storing them on
-Railway, Vercel, GitHub Actions, GitLab CI, and AWS, plus rotation.
+Tokens get fetched on first use and refreshed before they expire. You don't
+have to think about it.
 
-For a short-lived script you can supply a bearer token directly with
-`config :zapier_sdk, token: "..."` (or `ZAPIER_CREDENTIALS`). It is never
-refreshed.
+Hacking on something throwaway? You can hand it a bearer token directly with
+`config :zapier_sdk, token: "..."` (or `ZAPIER_CREDENTIALS`). That one never
+refreshes, so don't ship it.
 
-## Connections
+## Finding your connections
 
-A *connection* is an authenticated link between your Zapier account and a
-third-party app. Every action runs in the context of one. Connection IDs are
-UUIDs — find yours with:
+A connection is one authenticated link between your Zapier account and one app.
+Every action runs through one, so you need at least one before anything useful
+happens. Connect apps at
+[zapier.com/app/assets/connections](https://zapier.com/app/assets/connections),
+then list what you've got:
 
 ```elixir
 {:ok, connections} = ZapierSDK.list_connections()
@@ -73,7 +78,7 @@ Enum.each(connections, fn c ->
 end)
 ```
 
-Register the ones you use regularly so you can refer to them by name:
+The IDs are UUIDs. Give names to the ones you reach for often:
 
 ```elixir
 config :zapier_sdk, connections: [
@@ -84,14 +89,14 @@ config :zapier_sdk, connections: [
 ]
 ```
 
-Or build one inline, no config required:
+Or skip the config and build one on the spot:
 
 ```elixir
 conn = ZapierSDK.connection("google-drive", "02069fbe-9c91-81c1-8567-8ee2dbb7ad64")
 {:ok, result} = ZapierSDK.search(conn, "file_v2", %{"title" => "budget"})
 ```
 
-## Quick start
+## Doing something
 
 ```elixir
 # Search Google Drive
@@ -108,19 +113,46 @@ end
 })
 ```
 
-Actions have a *type* (`:search`, `:read`, `:write`, and a few others) that is
-part of their identity — Zapier exposes distinct `search` and `write` actions
-under the same key, and the API rejects a mismatch. Use the helper that matches:
-`search/4`, `read/4`, or `write/4`.
+That's most of the API. `search/4`, `read/4`, and `write/4` cover the common
+cases, and `run/3` takes an `Action` struct when you need a type they don't
+wrap.
 
-## Discovering actions and inputs
+## Things that will trip you up
+
+None of these are this library's doing. They're how Zapier's catalog works, and
+each one fails in a way the error message alone won't explain.
+
+**An action's type is part of its name.** Slack has a `channel_message` you
+write and a `channel_message` you read, and they're different actions. Calling
+`search/4` on a write action doesn't do something approximate, it gets rejected.
+
+**You can't guess input field names.** Slack's message body is `text`, not
+`message`. A DM's recipient goes in `channel`, not `user`. Google Calendar wants
+`calendarid`, `start_time`, and `end_time`. Look them up, don't assume.
+
+**Slugs move, keys don't.** Coda's actions still live under the key
+`CodaCLIAPI`, but its slug is now `superhuman-docs`. If an app you're sure
+exists won't resolve, try its key.
+
+**Connections expire.** OAuth grants lapse, and when one does every action
+against it fails until you reconnect the app in Zapier. You'll get
+`%Error{type: :connection_expired}` rather than a confusing empty result.
+
+The CLI is the fastest way to answer the first two:
+
+```bash
+npx @zapier/zapier-sdk-cli list-actions google-drive --action-type search
+npx @zapier/zapier-sdk-cli list-input-fields google-drive search file_v2
+```
+
+Same thing from Elixir, if you'd rather stay in IEx:
 
 ```elixir
 {:ok, apps}    = ZapierSDK.list_apps(search: "google")
 {:ok, actions} = ZapierSDK.list_actions("google-drive", action_type: "search")
 ```
 
-If you get an action key wrong, the error lists the valid ones:
+And when you get a key wrong, the error tells you what was available:
 
 ```elixir
 {:error, error} = ZapierSDK.search(:drive, "find_file", %{})
@@ -128,10 +160,10 @@ error.type     #=> :action_not_found
 error.details  #=> ["file_or_folder_by_id", "file_permissions", "file_v2", "folder_v2"]
 ```
 
-## Error handling
+## When things go wrong
 
-Nothing raises. Every call returns `{:ok, %Result{}}` or
-`{:error, %ZapierSDK.Error{}}`, and you can match on `error.type`:
+Nothing raises. You get `{:ok, %Result{}}` or `{:error, %ZapierSDK.Error{}}`,
+and the error has a `type` you can match on:
 
 ```elixir
 case ZapierSDK.search(:jira, "issue_key", %{"issue_key" => "PROJ-1"}) do
@@ -139,7 +171,7 @@ case ZapierSDK.search(:jira, "issue_key", %{"issue_key" => "PROJ-1"}) do
     result.data
 
   {:error, %ZapierSDK.Error{type: :connection_expired}} ->
-    # The app's OAuth grant lapsed — reconnect it in Zapier.
+    # OAuth grant lapsed. Reconnect the app in Zapier.
     :needs_reconnect
 
   {:error, %ZapierSDK.Error{type: :rate_limited} = error} ->
@@ -151,9 +183,13 @@ case ZapierSDK.search(:jira, "issue_key", %{"issue_key" => "PROJ-1"}) do
 end
 ```
 
-A run that finishes with integration errors is an **error**, not an empty
-success. An expired Jira connection gives you
-`%Error{type: :connection_expired}`, not `{:ok, %Result{count: 0}}`.
+One thing worth being explicit about: if a run finishes but the integration
+reported problems, that's an error here, not an empty success. An expired Jira
+connection gives you `%Error{type: :connection_expired}`, never
+`{:ok, %Result{count: 0}}`. A silent empty list is the worst possible answer to
+"did that work?", so you won't get one.
+
+The full set:
 
 | `type` | Meaning |
 |---|---|
@@ -163,20 +199,20 @@ success. An expired Jira connection gives you
 | `:action_failed` | The integration returned errors |
 | `:app_not_found` / `:action_not_found` | Unknown app or action key |
 | `:rate_limited` | 429; see `:retry_after_ms` |
-| `:timeout` | The run did not finish in time |
+| `:timeout` | The run didn't finish in time |
 | `:http_error` / `:transport_error` | Other HTTP or network failure |
 
-## Concurrency
+## Running a lot at once
 
-Actions run in the caller's process, so concurrency is just a matter of
-starting more of them.
+Actions run in whatever process calls them, so getting concurrency is mostly a
+matter of starting more processes. There are two helpers for the usual shapes:
 
 ```elixir
-# Off the current process
+# Fire one off and collect it later
 task = ZapierSDK.async(:drive, :search, "file_v2", %{"title" => "notes"})
 {:ok, result} = Task.await(task, 60_000)
 
-# Several at once, results in input order
+# Run a batch, get results back in the order you asked for
 alias ZapierSDK.Action
 
 results = ZapierSDK.run_many([
@@ -190,16 +226,16 @@ Enum.each(results, fn
 end)
 ```
 
-## Pagination and streaming
+## Pages
 
-`run/3` follows Zapier's `next_page` cursor and returns every page. Cap it with
-`:max_items`:
+`run/3` follows Zapier's cursor and hands back everything. If "everything" is
+more than you want, cap it:
 
 ```elixir
 {:ok, result} = ZapierSDK.search(:drive, "file_v2", %{"title" => "report"}, max_items: 50)
 ```
 
-Or stream, which fetches pages lazily so `Stream.take/2` stops early:
+Or stream it, which only fetches a page when you actually need one:
 
 ```elixir
 ZapierSDK.stream(:drive, "file_v2", %{"title" => "report"})
@@ -207,12 +243,13 @@ ZapierSDK.stream(:drive, "file_v2", %{"title" => "report"})
 |> Enum.each(&IO.inspect/1)
 ```
 
-Streams raise `ZapierSDK.Error` on failure, since there is nowhere to return an
-error tuple. Use `search/4` when you would rather match on one.
+Streams raise on failure instead of returning an error tuple, because there's
+nowhere in a stream to put one. If you'd rather match on errors, use `search/4`.
 
 ## App helpers
 
-Typed wrappers over the actions and input fields of a few common integrations:
+Thin wrappers for a handful of integrations, with the action and field names
+already filled in correctly:
 
 ```elixir
 alias ZapierSDK.Apps.{GoogleDrive, Slack, GoogleCalendar, Jira, Coda}
@@ -224,21 +261,18 @@ alias ZapierSDK.Apps.{GoogleDrive, Slack, GoogleCalendar, Jira, Coda}
 {:ok, rows}   = Coda.list_rows(doc_id, table_id)
 ```
 
-Each module reads a default named connection (`:drive`, `:slack`, `:calendar`,
-`:jira`, `:coda`); override per call with `connection:`.
+Each one defaults to a named connection (`:drive`, `:slack`, `:calendar`,
+`:jira`, `:coda`). Pass `connection:` to point it somewhere else.
 
 ## Telemetry
 
-Events are emitted under the `[:zapier_sdk, :action]` prefix:
+Everything is emitted under `[:zapier_sdk, :action]`:
 
 | Event | Measurements | Metadata |
 |---|---|---|
 | `[:zapier_sdk, :action, :start]` | `system_time` | `connection`, `action` |
 | `[:zapier_sdk, :action, :stop]` | `duration` | `connection`, `action`, `result` |
 | `[:zapier_sdk, :action, :exception]` | `duration` | `connection`, `action`, `kind`, `reason` |
-
-A returned `{:error, _}` is a `:stop` event whose `:result` is the error tuple,
-not an `:exception` — handlers counting failures should match on the result.
 
 ```elixir
 :telemetry.attach("log-zapier", [:zapier_sdk, :action, :stop], fn _e, %{duration: d}, meta, _ ->
@@ -247,10 +281,14 @@ not an `:exception` — handlers counting failures should match on the result.
 end, nil)
 ```
 
+If you're counting failures, match on the result rather than listening for
+`:exception`. A returned `{:error, _}` is a perfectly normal `:stop` event;
+`:exception` only fires when something actually blew up.
+
 ## Testing
 
-The SDK runs every request through `Req`, so tests can stub the transport with
-`Req.Test` and never touch the network:
+Every request goes through `Req`, so you can swap the transport for a stub and
+never touch the network:
 
 ```elixir
 # config/test.exs
@@ -263,7 +301,7 @@ config :zapier_sdk,
 ```elixir
 test "finds a file" do
   Req.Test.stub(ZapierSDK, fn conn ->
-    # ...respond to /api/v0/apps, /api/v0/actions, and the run endpoints
+    # respond to /api/v0/apps, /api/v0/actions, and the run endpoints
   end)
 
   assert {:ok, result} = ZapierSDK.search(:drive, "file_v2", %{"title" => "x"})
@@ -271,19 +309,22 @@ test "finds a file" do
 end
 ```
 
-This project's own suite uses `ZapierSDK.ZapierStub`, which implements the full
-protocol so tests describe outcomes rather than individual responses.
+Stubbing three endpoints by hand gets old fast, so this project's own tests use
+`ZapierSDK.ZapierStub`, which implements the whole protocol. Tests say what they
+want the action to return and the stub handles the rest. Worth copying if you're
+doing more than a couple of these.
 
 ## How it works
 
-Running an action is a two-phase protocol, which the SDK hides behind one call:
+Running an action takes two round trips, not one. The SDK does both for you:
 
 1. Resolve the app's versioned `implementation_id` and the action's internal
-   ID (cached in ETS, since they only change when an app publishes).
-2. `POST` an action run, then poll it with backoff until it leaves the
-   `waiting` state, following `next_page` for as long as you want results.
+   ID. These only change when an app publishes a new version, so they're cached
+   in ETS.
+2. `POST` an action run, then poll it with backoff until it stops reporting
+   `waiting`, following the cursor for as long as you want more results.
 
-```
+```text
 ZapierSDK              ← Public API
 ├── Client             ← Action runs: create, poll, paginate
 ├── Catalog            ← App/action/connection metadata + ETS cache
@@ -297,34 +338,28 @@ ZapierSDK              ← Public API
 └── Apps/              ← Jira, Slack, GoogleDrive, GoogleCalendar, Coda
 ```
 
-Only idempotent requests are retried. An action-run `POST` is never replayed —
-retrying "send a Slack message" would send it twice — and a 429 is surfaced
-with `:retry_after_ms` rather than slept on inside the call.
+Two deliberate choices in there. Only idempotent requests get retried, so an
+action run is never replayed: retrying "send a Slack message" sends it twice,
+and that's worse than failing. And a 429 comes straight back to you with
+`:retry_after_ms` attached rather than being slept on internally, because
+Zapier's `Retry-After` can be half a minute and a call that quietly blocks that
+long is indistinguishable from a hang.
 
-## Zapier's documentation
+## Zapier's docs
 
-This library is unofficial and not affiliated with Zapier. For the underlying
-platform:
+App keys, action keys, and field names are shared across every Zapier client,
+so their docs apply here even though the examples are TypeScript:
 
-| Link | What's there |
-|---|---|
-| [Zapier SDK](https://docs.zapier.com/sdk) | Landing page, beta status, concepts |
-| [Quickstart](https://docs.zapier.com/sdk/quickstart) | The official TypeScript walkthrough |
-| [API reference](https://docs.zapier.com/sdk/reference) | Every SDK method and its arguments |
-| [CLI reference](https://docs.zapier.com/sdk/cli-reference) | `list-apps`, `list-actions`, `list-input-fields`, and friends |
-| [Deploy with client credentials](https://docs.zapier.com/sdk/deploy) | Creating, storing, and rotating credentials |
-| [Your connections](https://zapier.com/app/assets/connections) | Connect apps and fix expired ones |
-
-App keys, action keys, and input field names are shared across every Zapier
-client, so the CLI is the fastest way to discover what to pass here:
-
-```bash
-npx @zapier/zapier-sdk-cli list-actions google-drive --action-type search
-npx @zapier/zapier-sdk-cli list-input-fields google-drive search file_v2
-```
-
-`ZapierSDK.list_apps/1` and `ZapierSDK.list_actions/2` expose the same catalog
-from Elixir if you would rather stay in the REPL.
+- [Zapier SDK](https://docs.zapier.com/sdk) for the overview and beta status
+- [Quickstart](https://docs.zapier.com/sdk/quickstart) if you want the official tour
+- [API reference](https://docs.zapier.com/sdk/reference) for every method
+- [Using the CLI](https://docs.zapier.com/sdk/using-the-cli) and the
+  [CLI reference](https://docs.zapier.com/sdk/cli-reference) for `list-actions`,
+  `list-input-fields`, and the rest
+- [Deploy with client credentials](https://docs.zapier.com/sdk/deploy) for
+  creating, storing, and rotating credentials
+- [Your connections](https://zapier.com/app/assets/connections) to connect apps
+  and fix expired ones
 
 ## License
 
